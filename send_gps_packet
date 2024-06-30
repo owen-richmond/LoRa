@@ -1,0 +1,90 @@
+#include <heltec_unofficial.h>
+#include <TinyGPSPlus.h>
+#include <HardwareSerial.h>
+#include <RadioLib.h>
+
+#define HELTEC_POWER_BUTTON
+#define BUTTON    GPIO_NUM_0
+#define FREQUENCY 866.3
+#define BANDWIDTH 250.0
+#define SPREADING_FACTOR 9
+#define TRANSMIT_POWER 22 // Maximum transmit power for the SX1262 chip
+
+// Define GPS pins
+#define GPS_RX_PIN 45
+#define GPS_TX_PIN 46
+
+// Create a TinyGPSPlus object
+TinyGPSPlus gps;
+
+// Use Serial2 for the GPS
+HardwareSerial gpsSerial(2);
+
+unsigned long startMillis;
+
+void setup() {
+  // Initialize the serial communication with the computer
+  Serial.begin(115200);
+
+  // Initialize the serial communication with the GPS module
+  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+
+  // Initialize the Heltec display
+  heltec_setup();
+  display.setFont(ArialMT_Plain_10); // Set font size for the display
+  display.clear(); // Clear the display
+
+  // Initialize the LoRa radio
+  both.println("Sender Init");
+  RADIOLIB_OR_HALT(radio.begin()); // Start the radio
+  radio.setDio1Action(NULL); // Disable the DIO1 interrupt
+  RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY)); // Set the frequency
+  RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH)); // Set the bandwidth
+  RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR)); // Set the spreading factor
+  RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER)); // Set the transmit power
+
+  startMillis = millis(); // Record the start time
+}
+
+void loop() {
+  heltec_loop(); // Run Heltec library loop
+
+  // Check if data is available from the GPS module
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read()); // Encode the GPS data
+  }
+
+  // Check for button press
+  if (button.pressedFor(10)) { // Check if the button is pressed for at least 10ms
+    both.println("Button pressed!"); // Print button press debug message
+
+    String message;
+    if (gps.location.isValid()) { // Check if the GPS location is valid
+      String lat = String(gps.location.lat(), 6); // Get latitude
+      String lng = String(gps.location.lng(), 6); // Get longitude
+      message = "Lat: " + lat + " Lng: " + lng; // Create message with coordinates
+      both.printf("Sending GPS coordinates: %s\n", message.c_str()); // Print message to send
+    } else {
+      message = "NO GPS YET"; // Message if GPS data is not available
+      both.println("Sending: NO GPS YET"); // Print message to send
+    }
+
+    heltec_led(50); // 50% brightness for the LED
+    uint16_t status = radio.transmit(message.c_str()); // Transmit the message
+    heltec_led(0); // Turn off the LED
+
+    display.clear(); // Clear the display before updating
+    if (status == RADIOLIB_ERR_NONE) { // Check if the transmission was successful
+      both.printf("Sent successfully: %s\n", message.c_str()); // Print success message
+      display.drawString(0, 0, "Sent: " + message); // Display the sent message
+      display.drawString(0, 10, "Status: Success"); // Display success status
+    } else {
+      both.printf("Failed to send: %s\n", message.c_str()); // Print failure message
+      display.drawString(0, 0, "Sent: " + message); // Display the sent message
+      display.drawString(0, 10, "Status: Fail"); // Display failure status
+    }
+    display.display(); // Update the display
+  }
+
+  delay(100); // Update every 100ms for better responsiveness
+}
