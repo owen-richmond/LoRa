@@ -1,0 +1,44 @@
+#include <heltec_unofficial.h>
+#include <RadioLib.h>
+
+#define HELTEC_POWER_BUTTON
+#define FREQUENCY 866.3
+#define BANDWIDTH 250.0
+#define SPREADING_FACTOR 9
+#define TRANSMIT_POWER 14
+
+String rxdata;
+volatile bool rxFlag = false;
+
+void setup() {
+  heltec_setup();
+  both.println("Receiver Init");
+  RADIOLIB_OR_HALT(radio.begin());
+  radio.setDio1Action(rx);
+  RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
+  RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
+  RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
+  RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
+  RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
+}
+
+void loop() {
+  heltec_loop();
+
+  if (rxFlag) {
+    rxFlag = false;
+    radio.readData(rxdata);
+    if (_radiolib_status == RADIOLIB_ERR_NONE) {
+      both.printf("Received: %s\n", rxdata.c_str());
+      display.clear();
+      display.drawString(0, 0, "Received:");
+      display.drawString(0, 10, rxdata.c_str());
+      display.display();
+    }
+    RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
+  }
+}
+
+void rx() {
+  rxFlag = true;
+}
