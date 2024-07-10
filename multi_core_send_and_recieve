@@ -1,0 +1,121 @@
+#include <heltec_unofficial.h>
+#include <RadioLib.h>
+#include "Timer.h"
+
+// Define constants for the Heltec power button, GPIO pin, LoRa frequency, bandwidth, spreading factor, and transmit power
+#define HELTEC_POWER_BUTTON
+#define BUTTON GPIO_NUM_0
+#define FREQUENCY 915.0
+#define BANDWIDTH 250.0
+#define SPREADING_FACTOR 9
+#define TRANSMIT_POWER 20 // Max power
+#define MAX_TRANSMISSIONS 5 // Reset after 5 transmissions
+
+// Declare global variables for button state, task handle, display timing, and transmission count
+volatile bool buttonPressed = false;
+TaskHandle_t taskHandle;
+unsigned long displayStartTime = 0;
+bool displayOn = false;
+int transmissionCount = 0;
+
+// Interrupt Service Routine (ISR) for button press
+void IRAM_ATTR onButtonPress() {
+  buttonPressed = true;
+}
+
+// Setup function to initialize the Heltec display, serial communication, pin modes, and LoRa configuration
+void setup() {
+  heltec_setup();
+  Serial.begin(115200);
+  pinMode(BUTTON, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON), onButtonPress, FALLING);
+
+  // Initialize the LoRa radio with specified parameters
+  radio.begin(FREQUENCY, BANDWIDTH, SPREADING_FACTOR, 7, RADIOLIB_SX126X_SYNC_WORD_PRIVATE, TRANSMIT_POWER, 8, 1.6, false);
+  radio.setDio1Action(NULL);
+
+  // Clear the display after initialization
+  display.clear();
+  display.display();
+
+  // Create a task on the second core to handle the main loop
+  xTaskCreatePinnedToCore(
+    loopTaskCore1, // Function to implement the task
+    "LoopTaskCore1", // Name of the task
+    10000, // Stack size in words
+    NULL, // Task input parameter
+    1, // Priority of the task
+    &taskHandle, // Task handle
+    0); // Core where the task should run (0 for PRO_CPU, 1 for APP_CPU)
+}
+
+// Empty loop function as the main work is done in the task function
+void loop() {
+  // Do nothing here
+}
+
+// Task function to run on the second core
+void loopTaskCore1(void *parameter) {
+  static uint8_t data[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
+  static uint8_t receivedData[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
+  
+  while (true) {
+    heltec_loop();
+
+    if (buttonPressed) {
+      buttonPressed = false;
+
+      // Create Timer object with random data
+      time_t currentTime = time(NULL);
+      uint16_t messageInterval = random(60, 300); // Random interval between 1 to 5 minutes
+      uint16_t waitTime = random(10, 60); // Random wait time between 10 to 60 seconds
+      uint8_t sleepState = random(0, 2); // Random sleep state (0 or 1)
+
+      Timer timer(currentTime, messageInterval, waitTime, sleepState);
+
+      // Serialize Timer object
+      timer.serialize(data);
+
+      // Send serialized data over LoRa
+      heltec_led(50); // LED on to indicate sending
+      radio.transmit(data, sizeof(data));
+      heltec_led(0); // LED off
+
+      transmissionCount++;
+      if (transmissionCount >= MAX_TRANSMISSIONS) {
+        transmissionCount = 0;
+      }
+
+      vTaskDelay(1); // Yield to other tasks
+    }
+
+    // Listen for serialized data over LoRa
+    int state = radio.receive(receivedData, sizeof(receivedData));
+    if (state == RADIOLIB_ERR_NONE) {
+      // Deserialize received data to create Timer object
+      Timer receivedTimer(receivedData);
+
+      // Display Timer object attributes on OLED
+      display.clear();
+      display.drawString(0, 0, "Received Timer:");
+      display.drawString(0, 10, "Current Time: " + receivedTimer.getTimeString(receivedTimer.getCurrentTime()));
+      display.drawString(0, 20, "Message Interval: " + String(receivedTimer.getMessageInterval()) + " sec");
+      display.drawString(0, 30, "Wait Time: " + String(receivedTimer.getWaitTime()) + " sec");
+      display.drawString(0, 40, "Sleep State: " + String(receivedTimer.getSleepState()));
+      display.display();
+
+      displayStartTime = millis();
+      displayOn = true;
+
+      vTaskDelay(1); // Yield to other tasks
+    }
+
+    if (displayOn && (millis() - displayStartTime > 1000)) {
+      display.clear();
+      display.display(); // Clear display
+      displayOn = false;
+    }
+
+    vTaskDelay(1); // Yield to other tasks
+  }
+}
