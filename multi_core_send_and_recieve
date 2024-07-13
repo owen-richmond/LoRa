@@ -1,38 +1,44 @@
-#include <heltec_unofficial.h>
-#include <RadioLib.h>
-#include "Timer.h"
+#include <heltec_unofficial.h> // Includes Heltec library for display and LoRa functionalities
+#include <RadioLib.h> // Includes RadioLib library for LoRa communication
+#include "Timer.h" // Includes the Timer class header
 
 // Define constants for the Heltec power button, GPIO pin, LoRa frequency, bandwidth, spreading factor, and transmit power
 #define HELTEC_POWER_BUTTON
 #define BUTTON GPIO_NUM_0
-#define FREQUENCY 915.0
-#define BANDWIDTH 250.0
-#define SPREADING_FACTOR 9
-#define TRANSMIT_POWER 20 // Max power
-#define MAX_TRANSMISSIONS 5 // Reset after 5 transmissions
+#define FREQUENCY 915.0 // Frequency for LoRa communication
+#define BANDWIDTH 250.0 // Bandwidth for LoRa communication
+#define SPREADING_FACTOR 9 // Spreading factor for LoRa communication
+#define TRANSMIT_POWER 20 // Maximum transmit power for LoRa
+#define MAX_TRANSMISSIONS 5 // Maximum number of transmissions before resetting
 
 // Declare global variables for button state, task handle, display timing, and transmission count
-volatile bool buttonPressed = false;
-TaskHandle_t taskHandle;
-unsigned long displayStartTime = 0;
-bool displayOn = false;
-int transmissionCount = 0;
+volatile bool buttonPressed = false; // Flag for button press state
+TaskHandle_t taskHandle; // Task handle for the secondary core task
+unsigned long displayStartTime = 0; // Start time for the display
+bool displayOn = false; // Flag for display state
+int transmissionCount = 0; // Count of transmissions
 
 // Interrupt Service Routine (ISR) for button press
 void IRAM_ATTR onButtonPress() {
-  buttonPressed = true;
+  buttonPressed = true; // Set button pressed flag to true
 }
 
 // Setup function to initialize the Heltec display, serial communication, pin modes, and LoRa configuration
 void setup() {
-  heltec_setup();
-  Serial.begin(115200);
-  pinMode(BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON), onButtonPress, FALLING);
+  heltec_setup(); // Initialize Heltec display
+  Serial.begin(115200); // Initialize serial communication at 115200 baud rate
+  pinMode(BUTTON, INPUT_PULLUP); // Set button pin mode to input with pull-up
+  attachInterrupt(digitalPinToInterrupt(BUTTON), onButtonPress, FALLING); // Attach interrupt to button press
 
   // Initialize the LoRa radio with specified parameters
   radio.begin(FREQUENCY, BANDWIDTH, SPREADING_FACTOR, 7, RADIOLIB_SX126X_SYNC_WORD_PRIVATE, TRANSMIT_POWER, 8, 1.6, false);
-  radio.setDio1Action(NULL);
+  radio.setDio1Action(NULL); // Set DIO1 action to NULL
+
+  // Display "Hello, World!" message on startup
+  display.clear();
+  display.drawString(0, 0, "Hello, World!");
+  display.display();
+  delay(500); // Display message for half a second
 
   // Clear the display after initialization
   display.clear();
@@ -56,34 +62,34 @@ void loop() {
 
 // Task function to run on the second core
 void loopTaskCore1(void *parameter) {
-  static uint8_t data[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
-  static uint8_t receivedData[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
+  static uint8_t data[sizeof(time_t) + 2 * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t)]; // Buffer for serialized Timer object (+1 for checksum)
+  static uint8_t receivedData[sizeof(time_t) + 2 * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t)]; // Buffer for received serialized Timer object (+1 for checksum)
   
   while (true) {
-    heltec_loop();
+    heltec_loop(); // Loop function for Heltec tasks
 
     if (buttonPressed) {
-      buttonPressed = false;
+      buttonPressed = false; // Reset button pressed flag
 
       // Create Timer object with random data
-      time_t currentTime = time(NULL);
+      time_t currentTime = time(NULL); // Get current time
       uint16_t messageInterval = random(60, 300); // Random interval between 1 to 5 minutes
       uint16_t waitTime = random(10, 60); // Random wait time between 10 to 60 seconds
-      uint8_t sleepState = random(0, 2); // Random sleep state (0 or 1)
+      uint8_t sleepState = random(0, 4); // Random sleep state (0 to 3)
 
-      Timer timer(currentTime, messageInterval, waitTime, sleepState);
+      Timer timer(currentTime, messageInterval, waitTime, sleepState); // Create Timer object
 
       // Serialize Timer object
       timer.serialize(data);
 
       // Send serialized data over LoRa
       heltec_led(50); // LED on to indicate sending
-      radio.transmit(data, sizeof(data));
+      radio.transmit(data, sizeof(data)); // Transmit data over LoRa
       heltec_led(0); // LED off
 
       transmissionCount++;
       if (transmissionCount >= MAX_TRANSMISSIONS) {
-        transmissionCount = 0;
+        transmissionCount = 0; // Reset transmission count after max transmissions
       }
 
       vTaskDelay(1); // Yield to other tasks
@@ -95,25 +101,28 @@ void loopTaskCore1(void *parameter) {
       // Deserialize received data to create Timer object
       Timer receivedTimer(receivedData);
 
+      // Get checksum from received data
+      uint8_t receivedChecksum = receivedData[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
+      uint8_t calculatedChecksum = receivedTimer.calculateChecksum(receivedData, sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t));
+
       // Display Timer object attributes on OLED
       display.clear();
       display.drawString(0, 0, "Received Timer:");
-      display.drawString(0, 10, "Current Time: " + receivedTimer.getTimeString(receivedTimer.getCurrentTime()));
-      display.drawString(0, 20, "Message Interval: " + String(receivedTimer.getMessageInterval()) + " sec");
-      display.drawString(0, 30, "Wait Time: " + String(receivedTimer.getWaitTime()) + " sec");
-      display.drawString(0, 40, "Sleep State: " + String(receivedTimer.getSleepState()));
+      display.drawString(0, 10, "Message Interval: " + String(receivedTimer.getMessageInterval()) + " sec");
+      display.drawString(0, 20, "Checksum: " + String(receivedChecksum, HEX));
+      display.drawString(0, 30, "Calculated: " + String(calculatedChecksum, HEX));
       display.display();
 
-      displayStartTime = millis();
-      displayOn = true;
+      displayStartTime = millis(); // Start display timer
+      displayOn = true; // Set display on flag
 
       vTaskDelay(1); // Yield to other tasks
     }
 
-    if (displayOn && (millis() - displayStartTime > 1000)) {
+    if (displayOn && (millis() - displayStartTime > 1000)) { // Clear display after 1 second
       display.clear();
       display.display(); // Clear display
-      displayOn = false;
+      displayOn = false; // Reset display on flag
     }
 
     vTaskDelay(1); // Yield to other tasks
