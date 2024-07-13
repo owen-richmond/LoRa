@@ -3,20 +3,17 @@
 #include "Timer.h" // Includes the Timer class header
 
 // Define constants for the Heltec power button, GPIO pin, LoRa frequency, bandwidth, spreading factor, and transmit power
-#define HELTEC_POWER_BUTTON
 #define BUTTON GPIO_NUM_0
 #define FREQUENCY 915.0 // Frequency for LoRa communication
 #define BANDWIDTH 250.0 // Bandwidth for LoRa communication
 #define SPREADING_FACTOR 9 // Spreading factor for LoRa communication
 #define TRANSMIT_POWER 20 // Maximum transmit power for LoRa
-#define MAX_TRANSMISSIONS 5 // Maximum number of transmissions before resetting
 
 // Declare global variables for button state, task handle, display timing, and transmission count
 volatile bool buttonPressed = false; // Flag for button press state
 TaskHandle_t taskHandle; // Task handle for the secondary core task
 unsigned long displayStartTime = 0; // Start time for the display
 bool displayOn = false; // Flag for display state
-int transmissionCount = 0; // Count of transmissions
 
 // Interrupt Service Routine (ISR) for button press
 void IRAM_ATTR onButtonPress() {
@@ -86,11 +83,6 @@ void loopTaskCore1(void *parameter) {
       heltec_led(50); // LED on to indicate sending
       radio.transmit(data, sizeof(data)); // Transmit data over LoRa
       heltec_led(0); // LED off
-
-      transmissionCount++;
-      if (transmissionCount >= MAX_TRANSMISSIONS) {
-        transmissionCount = 0; // Reset transmission count after max transmissions
-      }
 
       vTaskDelay(1); // Yield to other tasks
     }
