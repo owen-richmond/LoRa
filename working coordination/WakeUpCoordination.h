@@ -146,7 +146,7 @@ private:
                     Serial.println("Client received valid Timer object.");
 
                     for (int i = 0; i < 5; ++i) {
-                        delay(300);
+                        delay(225);
                         uint8_t checksumData[1] = {receivedChecksum};
                         int sendState = radio.transmit(checksumData, sizeof(checksumData));
                         if (sendState == RADIOLIB_ERR_NONE) {
