@@ -1,34 +1,35 @@
 /**
- * @file LoRa_Host_Main.ino
+ * @file LoRa_Client_Main.ino
  * @author Gemini
- * @brief Main sketch for a LoRa P2P Host (Sender) using the unified WakeUpCoordinator.
+ * @brief Main sketch for a LoRa P2P Client (Receiver) using the unified WakeUpCoordinator.
  * @version 5.1
  * @date 2025-07-22
  * @details
- * This main file demonstrates the clean, object-oriented approach.
- * Its sole responsibility is to configure this node as a SENDER and then
- * hand off all control to the WakeUpCoordinator object, which handles the
- * timed wake-up, CAD, and send logic.
+ * This main file demonstrates the clean, object-oriented approach you envisioned.
+ * Its sole responsibility is to configure this node as a RECEIVER and then
+ * hand off all control to the WakeUpCoordinator object.
  *
- * NOTE: This version is intentionally modified to send a packet with an
- * invalid checksum. This is to simulate a scenario where a relay node
- * would be required to validate and forward a corrected packet. The receiver
- * should identify this packet as invalid.
+ * NOTE: The corresponding Sender for this project is intentionally sending
+ * an invalid packet. This Receiver should correctly identify the checksum
+ * error and discard the packet. This setup is for a future project involving
+ * a relay node that will correct the packet.
  */
 
 #include <Arduino.h>
 #include "WakeUpCoordination.h" // The unified, role-based coordinator class
 
 //================================================================//
-//               a   NODE CONFIGURATION
+//                  NODE CONFIGURATION
 //================================================================//
 // 1. Set the role for this device.
-//    For the host, this must be SENDER.
-const WakeUpCoordinator::Role NODE_ROLE = WakeUpCoordinator::SENDER;
+//    For the client, this must be RECEIVER.
+const WakeUpCoordinator::Role NODE_ROLE = WakeUpCoordinator::RECEIVER;
 
-// 2. Define timing parameters for the SENDER role.
-const uint32_t SEND_INTERVAL_MS = 5000; // The total cycle time (10 seconds).
-const uint32_t WAKE_WINDOW_MS   = 500;  // The active window to try and send (3 seconds).
+// 2. Define timing parameters.
+//    NOTE: These are ignored for the RECEIVER role but are shown here for clarity.
+//    They would be used if you changed the NODE_ROLE to SENDER.
+const uint32_t SEND_INTERVAL_MS = 10000; // 10 seconds
+const uint32_t WAKE_WINDOW_MS   = 3000;  // 3 seconds
 
 
 //================================================================//
@@ -62,11 +63,11 @@ void setup() {
     }
 
     Serial.println("=========================================");
-    Serial.println("        LoRa P2P Host (Sender)           ");
+    Serial.println("      LoRa P2P Client (Receiver)         ");
     Serial.println("=========================================");
 
     // Initialize the coordinator. It will automatically configure the radio
-    // for the SENDER role and use the timing parameters defined above.
+    // for the RECEIVER role based on the NODE_ROLE setting.
     coordinator.begin(SEND_INTERVAL_MS, WAKE_WINDOW_MS);
 }
 
@@ -75,12 +76,14 @@ void setup() {
 //                        MAIN LOOP
 //================================================================//
 void loop() {
-    // The coordinator's run() method handles all logic for the SENDER.
-    // This includes managing the 10-second cycle, waking up, performing CAD,
-    // sending the packet, and putting the radio to sleep.
+    // The coordinator's run() method handles all logic. For a RECEIVER,
+    // this function does nothing, as all work is done in the OnRxDone callback.
+    // This leaves the main loop free for other application tasks.
     coordinator.run();
 
-    // The main loop is now free for other application tasks.
-    // We add a small delay to be friendly to the CPU.
-    delay(10);
+    // We can add a simple heartbeat LED to confirm the device is running.
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(50);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(1950);
 }
