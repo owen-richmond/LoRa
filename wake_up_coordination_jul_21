@@ -1,0 +1,201 @@
+#include <heltec_unofficial.h> // Includes Heltec library for display and LoRa functionalities
+#include <RadioLib.h> // Includes RadioLib library for LoRa communication
+#include "Timer.h" // Includes the Timer class header
+#include "esp_sleep.h" // Includes ESP sleep functions
+
+#define FREQUENCY 915.0 // Frequency for LoRa communication
+#define BANDWIDTH 250.0 // Bandwidth for LoRa communication
+#define SPREADING_FACTOR 9 // Spreading factor for LoRa communication
+#define TRANSMIT_POWER 20 // Maximum transmit power for LoRa
+
+#define IS_HOST true // Define the role of the device (true for host, false for client)
+
+TaskHandle_t taskHandle; // Task handle for the secondary core task
+bool firstRunAfterDeepSleep = false; // Flag to detect first run after deep sleep
+
+Timer timer(0, 0, 0, 0); // Declare Timer object
+
+// Structure to hold the send time and checksum
+struct SentMessageInfo {
+  unsigned long sendTime;
+  uint8_t checksum;
+};
+
+SentMessageInfo lastSentMessage;
+
+void initializeHeltec() {
+  heltec_setup(); // Initialize Heltec display
+  Serial.begin(115200); // Initialize serial communication at 115200 baud rate
+
+  // Initialize the LoRa radio with specified parameters
+  radio.begin(FREQUENCY, BANDWIDTH, SPREADING_FACTOR, 7, RADIOLIB_SX126X_SYNC_WORD_PRIVATE, TRANSMIT_POWER, 8, 1.6, false);
+  radio.setDio1Action(NULL); // Set DIO1 action to NULL
+
+  // Display "Hello, World!" message on startup
+  display.clear();
+  display.drawString(0, 0, "Hello, World!");
+  display.display();
+  delay(500); // Display message for half a second
+
+  // Clear the display after initialization
+  display.clear();
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200); // Initialize serial communication at 115200 baud rate
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause(); // Detect the wake-up reason
+
+  // Handle wake-up reasons
+  switch (wakeup_reason) {
+    case ESP_SLEEP_WAKEUP_TIMER:
+      firstRunAfterDeepSleep = true; // Set the flag to indicate waking up from deep sleep
+      Serial.println("Waking up from deep sleep.");
+      break;
+    default:
+      firstRunAfterDeepSleep = false; // Normal reset, perform full initialization
+      Serial.println("Wakeup was not caused by deep sleep.");
+      initializeHeltec(); // Initialize Heltec display and LoRa
+      break;
+  }
+
+  // Create a task on the second core to handle the main loop
+  xTaskCreatePinnedToCore(
+    loopTaskCore1, // Function to implement the task
+    "LoopTaskCore1", // Name of the task
+    10000, // Stack size in words
+    NULL, // Task input parameter
+    1, // Priority of the task
+    &taskHandle, // Task handle
+    0); // Core where the task should run (0 for PRO_CPU, 1 for APP_CPU)
+}
+
+void resetState() {
+  // Clear and reset any state variables
+  memset(&lastSentMessage, 0, sizeof(SentMessageInfo));
+  timer = Timer(0, 0, 0, 0); // Reset Timer object
+}
+
+void loop() {
+  // Do nothing here
+}
+
+// Task function to run on the second core
+void loopTaskCore1(void *parameter) {
+  static uint8_t data[sizeof(time_t) + 2 * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t)]; // Buffer for serialized Timer object (+1 for checksum)
+  static uint8_t receivedData[sizeof(time_t) + 2 * sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint8_t)]; // Buffer for received serialized Timer object (+1 for checksum)
+  unsigned long lastSendTime = millis(); // Record the last send time
+  unsigned long receivedTime = 0; // Record the time of received data
+
+  while (true) {
+    heltec_loop(); // Loop function for Heltec tasks
+
+    if (firstRunAfterDeepSleep) {
+      resetState(); // Reset the state after waking up from deep sleep
+      firstRunAfterDeepSleep = false;
+      Serial.println("Reinitialized after deep sleep.");
+    }
+
+    if (IS_HOST) {
+      if (millis() - lastSendTime >= 2000) { // Send every 2 seconds
+        time_t currentTime = time(NULL); // Get current time
+        uint16_t messageInterval = 20; // Message interval of 20 seconds
+        uint16_t waitTime = 5; // Wait time of 5 seconds
+        uint8_t sleepState = 1; // Sleep state
+
+        timer = Timer(currentTime, messageInterval, waitTime, sleepState); // Create Timer object
+        timer.serialize(data); // Serialize Timer object
+
+        heltec_led(50); // LED on to indicate sending
+        radio.transmit(data, sizeof(data)); // Transmit data over LoRa
+        heltec_led(0); // LED off
+
+        // Save the send time and checksum
+        lastSentMessage.sendTime = millis();
+        lastSentMessage.checksum = data[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
+
+        Serial.println("Host sent Timer object.");
+        lastSendTime = millis(); // Update last send time
+      }
+
+      // Check for confirmation checksum from the client
+      int state = radio.receive(receivedData, sizeof(receivedData));
+      if (state == RADIOLIB_ERR_NONE) {
+        uint8_t receivedChecksum = receivedData[0];
+        if (receivedChecksum == lastSentMessage.checksum) {
+          unsigned long receivedTime = millis();
+          unsigned long timeSinceSent = (receivedTime - lastSentMessage.sendTime) / 1000;
+          unsigned long sleepDuration = timer.getMessageInterval() - timeSinceSent;
+
+          Serial.print("Host received confirmation checksum. Time since sent: ");
+          Serial.print(timeSinceSent);
+          Serial.print(" seconds. Sleeping for: ");
+          Serial.print(sleepDuration);
+          Serial.println(" seconds.");
+
+          // Clear received data before entering deep sleep
+          memset(receivedData, 0, sizeof(receivedData));
+
+          // Enter deep sleep for the remaining duration of the message interval
+          esp_sleep_enable_timer_wakeup(sleepDuration * 1000000);
+          esp_deep_sleep_start();
+        }
+      }
+    } else {
+      // Listen for serialized data over LoRa
+      int state = radio.receive(receivedData, sizeof(receivedData));
+      if (state == RADIOLIB_ERR_NONE) {
+        Serial.println("Client received data.");
+
+        // Deserialize received data to create Timer object
+        Timer receivedTimer(receivedData);
+
+        // Get checksum from received data
+        uint8_t receivedChecksum = receivedData[sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t)];
+        uint8_t calculatedChecksum = receivedTimer.calculateChecksum(receivedData, sizeof(time_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint8_t));
+
+        if (receivedChecksum == calculatedChecksum) {
+          display.clear();
+          display.drawString(0, 0, "Received Timer:");
+          display.drawString(0, 10, "Message Interval: " + String(receivedTimer.getMessageInterval()) + " sec");
+          display.drawString(0, 20, "Checksum: " + String(receivedChecksum, HEX));
+          display.drawString(0, 30, "Calculated: " + String(calculatedChecksum, HEX));
+          display.display();
+
+          timer = receivedTimer; // Update Timer object for the client
+          receivedTime = millis(); // Record the time of received data
+
+          Serial.println("Client received Timer object.");
+
+          // Send back checksum every 0.3 seconds until 5 have been sent
+          for (int i = 0; i < 5; ++i) {
+            delay(300);
+            uint8_t checksumData[1] = {receivedChecksum};
+            radio.transmit(checksumData, sizeof(checksumData));
+            Serial.println("Client sent checksum.");
+          }
+
+          // Calculate meeting interval
+          unsigned long timeElapsed = (millis() - receivedTime) / 1000;
+          unsigned long meetingInterval = timer.getMessageInterval() - timeElapsed;
+
+          // Clear received data before entering deep sleep
+          memset(receivedData, 0, sizeof(receivedData));
+
+          // Enter deep sleep for meeting interval seconds
+          Serial.print("Client going to sleep for ");
+          Serial.print(meetingInterval);
+          Serial.println(" seconds.");
+          esp_sleep_enable_timer_wakeup(meetingInterval * 1000000);
+          esp_deep_sleep_start();
+        } else {
+          Serial.println("Received data checksum mismatch.");
+        }
+      } else {
+        Serial.println("Client did not receive data.");
+      }
+    }
+
+    vTaskDelay(1); // Yield to other tasks
+  }
+}

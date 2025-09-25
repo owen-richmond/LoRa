@@ -1,0 +1,52 @@
+#include <heltec_unofficial.h>
+#include <RadioLib.h>
+
+#define HELTEC_POWER_BUTTON
+#define BUTTON    GPIO_NUM_0
+#define FREQUENCY 866.3
+#define BANDWIDTH 250.0
+#define SPREADING_FACTOR 9
+#define TRANSMIT_POWER 14
+
+const char* words[] = {"Hello", "World", "LoRa", "ESP32", "Heltec"};
+bool txFlag = false;
+
+void setup() {
+  heltec_setup();
+  both.println("Sender Init");
+  RADIOLIB_OR_HALT(radio.begin());
+  radio.setDio1Action(NULL);
+  RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
+  RADIOLIB_OR_HALT(radio.setBandwidth(BANDWIDTH));
+  RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
+  RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
+}
+
+void loop() {
+  heltec_loop();
+  
+  if (button.pressed()) {
+    int randomIndex = random(0, 5);
+    const char* wordToSend = words[randomIndex];
+    both.printf("Sending: %s\n", wordToSend);
+
+    heltec_led(50); // 50% brightness is plenty for this LED
+    uint16_t status = radio.transmit(wordToSend);
+    heltec_led(0);
+
+    if (status == RADIOLIB_ERR_NONE) {
+      both.printf("Sent successfully: %s\n", wordToSend);
+    } else {
+      both.printf("Failed to send: %s\n", wordToSend);
+    }
+
+    display.clear();
+    display.drawString(0, 0, String("Sent: ") + wordToSend);
+    if (status == RADIOLIB_ERR_NONE) {
+      display.drawString(0, 10, "Status: Success");
+    } else {
+      display.drawString(0, 10, "Status: Fail");
+    }
+    display.display();
+  }
+}
